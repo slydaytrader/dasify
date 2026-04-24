@@ -2,7 +2,7 @@ const mqtt = require('mqtt');
 const axios = require('axios');
 const http = require('http');
 
-// --- SMS CONFIG ---
+// --- CONFIG ---
 const PING_TOKEN = "24|t9IXUNcsidTqyxMzHwErxhG1E2sETgszYHz10l9hffb7f076";
 const ADMIN_PHONE = "+254729901111"; 
 const PHP_API = "https://dasify.co.ke/lisaki/api/sync_handler.php";
@@ -17,7 +17,7 @@ const client = mqtt.connect('mqtts://m518b210.ala.us-east-1.emqxsl.com:8883', {
     username: 'esp_device', password: 'gamepage6', rejectUnauthorized: false
 });
 
-// Optimized SMS Function
+// SMS Function (International Format Handling)
 async function sendSMS(to, msg) {
     if (!to) return;
     let phone = to.toString().replace(/\D/g, '');
@@ -33,7 +33,8 @@ async function sendSMS(to, msg) {
             headers: { 'Authorization': `Bearer ${PING_TOKEN}` },
             timeout: 5000
         });
-    } catch (err) { console.error("SMS Error:", err.message); }
+        console.log(`✅ SMS Sent to ${phone}`);
+    } catch (err) { console.error("❌ SMS Error:", err.message); }
 }
 
 async function performFullSync() {
@@ -60,30 +61,31 @@ client.on('message', async (topic, message) => {
     if (['cache', 'inventory'].includes(type)) return;
 
     try {
-        // 1. Core Action: Save to DB
+        // 1. Save to DB
         await axios.post(PHP_API, { type, payload });
         
-        // 2. Core Action: Refresh ESP immediately
+        // 2. Refresh ESP Inventory
         const invRes = await axios.get(`${PHP_API}?get_inventory=1`);
         client.publish('dasify/lisakidairy/inventory', invRes.data.toString());
 
-        // 3. Background Action: SMS (Non-blocking)
+        // 3. Background SMS (Non-blocking)
         const parts = payload.split('|');
         if (type === 'intake' && parts.length >= 5) {
             const [ph, lacto, fNum, vol, ppl] = parts;
-            const total = (parseFloat(vol) * parseFloat(ppl)).toFixed(1);
+            const total = (parseFloat(vol) * parseFloat(ppl)).toFixed(2);
             
-            // Fetch phone and send SMS without 'awaiting' so the bridge stays fast
+            // Fetch name/phone and send receipt
             axios.get(`${PHP_API}?get_farmer_phone=${fNum}`).then(res => {
                 if (res.data && res.data.phone) {
-                    sendSMS(res.data.phone, `Lisaki: Received ${vol}L at ${ppl}/L. Total KES ${total}`);
+                    const msg = `${res.data.name}\nwe have recieved your ${vol} liters with Ph value ${ph} at a ppl of ksh ${ppl} totalling ksh ${total}.\nyour farmer number is ${fNum}`;
+                    sendSMS(res.data.phone, msg);
                 }
             }).catch(() => {});
         } 
         else if (type === 'sales') {
             const [amt, ppl, vol] = parts;
-            sendSMS(ADMIN_PHONE, `Lisaki SALE: ${vol}L sold for KES ${amt}. Rate: ${ppl}`);
+            sendSMS(ADMIN_PHONE, `Lisaki SALE: ${vol}L sold for KES ${amt} at ${ppl}/L.`);
         }
 
-    } catch (err) { console.error(`❌ [${type}] DB Error: ${err.message}`); }
+    } catch (err) { console.error(`❌ [${type}] Bridge Error: ${err.message}`); }
 });
