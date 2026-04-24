@@ -2,9 +2,10 @@ const mqtt = require('mqtt');
 const axios = require('axios');
 const http = require('http');
 
-// --- SMS CONFIGURATION ---
+// --- SMS CONFIG ---
 const PING_TOKEN = "24|t9IXUNcsidTqyxMzHwErxhG1E2sETgszYHz10l9hffb7f076";
-const ADMIN_PHONE = "+254729901111"; // <--- Put the Admin Phone Number here
+const ADMIN_PHONE = "+254729901111"; 
+const PHP_API = "https://dasify.co.ke/lisaki/api/sync_handler.php";
 
 http.createServer((req, res) => {
   res.writeHead(200);
@@ -16,36 +17,30 @@ const client = mqtt.connect('mqtts://m518b210.ala.us-east-1.emqxsl.com:8883', {
     username: 'esp_device', password: 'gamepage6', rejectUnauthorized: false
 });
 
-const PHP_API = "https://dasify.co.ke/lisaki/api/sync_handler.php";
+// Optimized SMS Function
+async function sendSMS(to, msg) {
+    if (!to) return;
+    let phone = to.toString().replace(/\D/g, '');
+    if (phone.startsWith('0')) phone = '254' + phone.substring(1);
+    if (!phone.startsWith('+')) phone = '+' + phone;
 
-// Helper to format phone to International format
-function formatPhone(phone) {
-    let clean = phone.toString().replace(/\D/g, '');
-    if (clean.startsWith('0')) clean = '254' + clean.substring(1);
-    return clean.startsWith('+') ? clean : '+' + clean;
-}
-
-// SMS Dispatcher
-async function sendSMS(to, message) {
     try {
         await axios.post("https://api.bulk.ping.africa/api/sms/send", {
-            recipient: formatPhone(to),
-            message: message,
+            recipient: phone,
+            message: msg,
             sender_id: "PING-AFRICA"
         }, {
-            headers: { 'Authorization': `Bearer ${PING_TOKEN}` }
+            headers: { 'Authorization': `Bearer ${PING_TOKEN}` },
+            timeout: 5000
         });
-        console.log(`✅ SMS Sent to ${to}`);
-    } catch (err) {
-        console.error("❌ SMS Failed:", err.response ? err.response.data : err.message);
-    }
+    } catch (err) { console.error("SMS Error:", err.message); }
 }
 
 async function performFullSync() {
     try {
         const [farmerRes, invRes] = await Promise.all([
-            axios.get(`${PHP_API}?format=text`, { timeout: 4000 }),
-            axios.get(`${PHP_API}?get_inventory=1`, { timeout: 4000 })
+            axios.get(`${PHP_API}?format=text`, { timeout: 5000 }),
+            axios.get(`${PHP_API}?get_inventory=1`, { timeout: 5000 })
         ]);
         if (farmerRes.data) client.publish('dasify/lisakidairy/cache', farmerRes.data.trim());
         if (invRes.data) client.publish('dasify/lisakidairy/inventory', invRes.data.toString());
@@ -65,35 +60,29 @@ client.on('message', async (topic, message) => {
     if (['cache', 'inventory'].includes(type)) return;
 
     try {
-        // 1. Save to Database
+        // 1. Core Action: Save to DB
         await axios.post(PHP_API, { type, payload });
-
-        // 2. Refresh ESP Inventory
+        
+        // 2. Core Action: Refresh ESP immediately
         const invRes = await axios.get(`${PHP_API}?get_inventory=1`);
         client.publish('dasify/lisakidairy/inventory', invRes.data.toString());
 
-        // 3. SMS Logic
+        // 3. Background Action: SMS (Non-blocking)
         const parts = payload.split('|');
-        
-        if (type === 'intake') {
-            // Intake Payload: ph|lacto|farmer_num|vol|ppl
+        if (type === 'intake' && parts.length >= 5) {
             const [ph, lacto, fNum, vol, ppl] = parts;
-            const total = (parseFloat(vol) * parseFloat(ppl)).toFixed(2);
+            const total = (parseFloat(vol) * parseFloat(ppl)).toFixed(1);
             
-            // Get Farmer Phone from Cache (or you can adjust PHP to return it)
-            // For now, we fetch the farmer details for the phone number
-            const farmerInfo = await axios.get(`${PHP_API}?get_farmer_phone=${fNum}`);
-            if (farmerInfo.data && farmerInfo.data.phone) {
-                const msg = `Lisaki Dairy: Received ${vol}L at ${ppl}/L. Total: KES ${total}. Ref: Batch-${Date.now().toString().slice(-4)}`;
-                sendSMS(farmerInfo.data.phone, msg);
-            }
+            // Fetch phone and send SMS without 'awaiting' so the bridge stays fast
+            axios.get(`${PHP_API}?get_farmer_phone=${fNum}`).then(res => {
+                if (res.data && res.data.phone) {
+                    sendSMS(res.data.phone, `Lisaki: Received ${vol}L at ${ppl}/L. Total KES ${total}`);
+                }
+            }).catch(() => {});
         } 
-        
         else if (type === 'sales') {
-            // Sales Payload: total_amount|ppl|vol
-            const [total, ppl, vol] = parts;
-            const msg = `Lisaki SALE: ${vol}L sold for KES ${total} (Rate: ${ppl}/L). Dispenser updated.`;
-            sendSMS(ADMIN_PHONE, msg);
+            const [amt, ppl, vol] = parts;
+            sendSMS(ADMIN_PHONE, `Lisaki SALE: ${vol}L sold for KES ${amt}. Rate: ${ppl}`);
         }
 
     } catch (err) { console.error(`❌ [${type}] DB Error: ${err.message}`); }
