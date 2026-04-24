@@ -4,7 +4,7 @@ const http = require('http');
 
 // --- SMS CONFIGURATION ---
 const PING_TOKEN = "24|t9IXUNcsidTqyxMzHwErxhG1E2sETgszYHz10l9hffb7f076";
-const ADMIN_PHONE = "+2547XXXXXXXX"; // <--- Put the Admin Phone Number here
+const ADMIN_PHONE = "+254729901111"; // <--- Put the Admin Phone Number here
 
 http.createServer((req, res) => {
   res.writeHead(200);
