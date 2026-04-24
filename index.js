@@ -17,6 +17,7 @@ const client = mqtt.connect('mqtts://m518b210.ala.us-east-1.emqxsl.com:8883', {
     username: 'esp_device', password: 'gamepage6', rejectUnauthorized: false
 });
 
+// SMS Function with strict 160 char limit
 async function sendSMS(to, msg) {
     if (!to) return;
     let phone = to.toString().replace(/\D/g, '');
@@ -26,7 +27,7 @@ async function sendSMS(to, msg) {
     try {
         await axios.post("https://api.bulk.ping.africa/api/sms/send", {
             recipient: phone,
-            message: msg.substring(0, 160), // Hard limit for safety
+            message: msg.substring(0, 160), 
             sender_id: "PING-AFRICA"
         }, {
             headers: { 'Authorization': `Bearer ${PING_TOKEN}` },
@@ -60,7 +61,10 @@ client.on('message', async (topic, message) => {
     if (['cache', 'inventory'].includes(type)) return;
 
     try {
+        // 1. Save to DB
         await axios.post(PHP_API, { type, payload });
+        
+        // 2. Update ESP Inventory
         const invRes = await axios.get(`${PHP_API}?get_inventory=1`);
         client.publish('dasify/lisakidairy/inventory', invRes.data.toString());
 
@@ -74,18 +78,16 @@ client.on('message', async (topic, message) => {
                 if (res.data && res.data.phone) {
                     const { name, phone, balance } = res.data;
 
-                    // Farmer SMS (~120 chars)
+                    // CONCISE FARMER SMS (Strictly under 160 chars)
                     const fMsg = `Lisaki: ${name}, recvd ${vol}L (pH ${ph}) @${ppl}. Total: KES ${total}. Total Owed: KES ${balance}. Acc: ${fNum}`;
+                    
                     sendSMS(phone, fMsg);
-
-                    // Admin Alert (~130 chars)
-                    const aMsg = `ADM Intake: ${name} (#${fNum}) recvd ${vol}L (pH ${ph}). Amt: KES ${total}. New Bal: KES ${balance}`;
-                    sendSMS(ADMIN_PHONE, aMsg);
                 }
             }).catch(() => {});
         } 
         else if (type === 'sales') {
             const [amt, ppl, vol] = parts;
+            // Admin only receives Sales notifications
             const sMsg = `Lisaki SALE: ${vol}L sold for KES ${amt} (Rate: ${ppl}/L). Dispenser updated.`;
             sendSMS(ADMIN_PHONE, sMsg);
         }
