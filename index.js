@@ -17,7 +17,6 @@ const client = mqtt.connect('mqtts://m518b210.ala.us-east-1.emqxsl.com:8883', {
     username: 'esp_device', password: 'gamepage6', rejectUnauthorized: false
 });
 
-// SMS Function with strict 160 char limit
 async function sendSMS(to, msg) {
     if (!to) return;
     let phone = to.toString().replace(/\D/g, '');
@@ -64,7 +63,7 @@ client.on('message', async (topic, message) => {
         // 1. Save to DB
         await axios.post(PHP_API, { type, payload });
         
-        // 2. Update ESP Inventory
+        // 2. Refresh ESP Inventory
         const invRes = await axios.get(`${PHP_API}?get_inventory=1`);
         client.publish('dasify/lisakidairy/inventory', invRes.data.toString());
 
@@ -76,10 +75,10 @@ client.on('message', async (topic, message) => {
             
             axios.get(`${PHP_API}?get_farmer_phone=${fNum}`).then(res => {
                 if (res.data && res.data.phone) {
-                    const { name, phone, balance } = res.data;
+                    const { name, phone } = res.data;
 
-                    // CONCISE FARMER SMS (Strictly under 160 chars)
-                    const fMsg = `Lisaki: ${name}, recvd ${vol}L (pH ${ph}) @${ppl}. Total: KES ${total}. Total Owed: KES ${balance}. Acc: ${fNum}`;
+                    // Message excludes "Total Owed"
+                    const fMsg = `Lisaki: ${name}, recvd ${vol}L (pH ${ph}) @${ppl}. Total for this delivery: KES ${total}. Acc: ${fNum}`;
                     
                     sendSMS(phone, fMsg);
                 }
